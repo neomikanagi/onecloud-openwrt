@@ -20,6 +20,7 @@ include $(INCLUDE_DIR)/target.mk
 
 DEFAULT_PACKAGES += \
 	blkid \
+	kmod-gpio-button-hotplug \
 	e2fsprogs \
 	losetup \
 	partx-utils \

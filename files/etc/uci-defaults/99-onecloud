@@ -11,6 +11,11 @@ uci -q set system.ntp.enable_server='1'
 
 uci -q set luci.main.lang='zh_cn'
 
+# Bigger DNS cache: the default 150 entries turns over constantly once a
+# few clients and a proxy are asking.
+uci -q set dhcp.@dnsmasq[0].cachesize='1000'
+uci -q commit dhcp
+
 uci -q commit system
 uci -q commit luci
 
