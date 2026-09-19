@@ -83,9 +83,9 @@ jobs:
           path: |
             /workdir/openwrt/.ccache
             /workdir/openwrt/dl
-          key: onecloud-${{ env.REPO_BRANCH }}-${{ hashFiles('config/onecloud.config') }}
+          key: onecloud-v2-${{ env.REPO_BRANCH }}-${{ hashFiles('config/onecloud.config') }}
           restore-keys: |
-            onecloud-${{ env.REPO_BRANCH }}-
+            onecloud-v2-${{ env.REPO_BRANCH }}-
 
       - name: Inject target and custom files
         run: |
@@ -131,8 +131,11 @@ jobs:
         run: |
           cd openwrt
           make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
+          # Drop failed downloads. Only top-level files: dl/ also holds the
+          # extracted go-mod-cache tree, and plenty of legitimate .go files in
+          # there are under 1 KiB. Pruning those corrupts the module cache and
+          # breaks every Go package on the next cached run.
+          find dl -maxdepth 1 -type f -size -1024c -print -delete
 
       - name: Compile
         id: compile
