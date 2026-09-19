@@ -2,7 +2,7 @@
 
 玩客云（Thunder OneCloud，Amlogic S805 / meson8b，32 位）的 OpenWrt 固件。
 
-源码是官方 [openwrt/openwrt](https://github.com/openwrt/openwrt) 的 `openwrt-25.12` 稳定分支。官方源码树里没有 S805 的 target，设备支持（设备树、6.12 内核补丁、镜像打包）由本仓库的 `target/linux/amlogic` 提供。
+源码是官方 [openwrt/openwrt](https://github.com/openwrt/openwrt) 最新的 `v25.12.x` 正式发布版（不是分支头）。官方源码树里没有 S805 的 target，设备支持（设备树、6.12 内核补丁、镜像打包）由本仓库的 `target/linux/amlogic` 提供。
 
 每月 1 号自动云编译一次，产物发在 [Releases](../../releases)。
 

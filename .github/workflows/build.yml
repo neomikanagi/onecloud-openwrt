@@ -23,6 +23,7 @@ env:
   TZ: Etc/UTC
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: openwrt-25.12
+  REPO_SERIES: v25.12
   LAN_IP: ${{ inputs.lan_ip || '10.10.10.1' }}
   USE_CCACHE: ${{ github.event_name != 'workflow_dispatch' && 'true' || (inputs.use_ccache && 'true' || 'false') }}
   AMLIMG_VERSION: v0.3.1
@@ -60,13 +61,20 @@ jobs:
           sudo chown "$USER:$USER" /workdir
           df -hT
 
-      - name: Clone OpenWrt ${{ env.REPO_BRANCH }}
+      - name: Clone the newest OpenWrt ${{ env.REPO_SERIES }} release tag
         working-directory: /workdir
         run: |
-          git clone --depth=1 --single-branch --branch "${REPO_BRANCH}" "${REPO_URL}" openwrt
+          # Build from a tagged point release, not the branch head. The head of
+          # a stable branch carries commits that have not been through a
+          # release, which is the wrong trade for an unattended monthly build.
+          tag=$(git ls-remote --tags --refs "${REPO_URL}" "${REPO_SERIES}.*" \
+                | awk -F/ '{print $NF}' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "::error::no ${REPO_SERIES}.* tag found"; exit 1; }
+          echo "building OpenWrt $tag"
+          git clone --depth=1 --single-branch --branch "$tag" "${REPO_URL}" openwrt
           ln -sfn /workdir/openwrt "${GITHUB_WORKSPACE}/openwrt"
           echo "OPENWRT_SHA=$(git -C openwrt rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          echo "OPENWRT_VERSION=$(cat openwrt/version 2>/dev/null || echo "${REPO_BRANCH}")" >> "$GITHUB_ENV"
+          echo "OPENWRT_VERSION=$tag" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=v$(date +%Y.%m.%d)" >> "$GITHUB_ENV"
 
       - name: Cache ccache and downloads
