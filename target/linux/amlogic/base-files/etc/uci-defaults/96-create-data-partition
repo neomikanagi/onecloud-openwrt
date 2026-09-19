@@ -1,0 +1,60 @@
+#!/bin/sh
+# Format and mount p3 data partition at /mnt/data
+# Cleans up any pre-existing fstab entries for this device before adding ours.
+
+[ -f /etc/.data_partition_created ] && exit 0
+
+# Find eMMC device (type MMC, not SD)
+EMMC_DEV=""
+for dev in mmcblk1 mmcblk0; do
+	if [ -b "/dev/$dev" ] && [ -d "/sys/block/$dev/device" ]; then
+		mtype=$(cat "/sys/block/$dev/device/type" 2>/dev/null)
+		[ "$mtype" = "MMC" ] && EMMC_DEV="$dev" && break
+	fi
+done
+[ -z "$EMMC_DEV" ] && exit 0
+
+DATA_PART="/dev/${EMMC_DEV}p3"
+
+# p3 should be created by preinit 80_fix_partition_table
+[ ! -b "$DATA_PART" ] && exit 0
+
+# Format if not ext4
+if ! blkid "$DATA_PART" 2>/dev/null | grep -q 'TYPE="ext4"'; then
+	echo "create-data-partition: formatting $DATA_PART as ext4"
+	mkfs.ext4 -F -L data "$DATA_PART" 2>&1
+fi
+
+mkdir -p /mnt/data
+
+# Remove ALL existing fstab mount entries that reference this device
+# (block auto-scan may have created anonymous ones; avoid duplicates)
+i=0
+while uci -q get "fstab.@mount[$i]" >/dev/null 2>&1; do
+	dev=$(uci -q get "fstab.@mount[$i].device" 2>/dev/null)
+	if [ "$dev" = "$DATA_PART" ]; then
+		uci -q delete "fstab.@mount[$i]"
+	else
+		i=$((i + 1))
+	fi
+done
+uci -q delete fstab.data 2>/dev/null
+
+# Add our mount entry (uci add prints the new section name)
+section=$(uci add fstab mount)
+uci set "fstab.${section}.target=/mnt/data"
+uci set "fstab.${section}.device=$DATA_PART"
+uci set "fstab.${section}.fstype=ext4"
+uci set "fstab.${section}.options=rw,noatime"
+uci set "fstab.${section}.enabled=1"
+uci set "fstab.${section}.enabled_fsck=0"
+uci commit fstab
+
+# Mount immediately
+mount -t ext4 -o rw,noatime "$DATA_PART" /mnt/data 2>&1
+mkdir -p /mnt/data/public
+chmod 777 /mnt/data/public
+
+touch /etc/.data_partition_created
+
+exit 0

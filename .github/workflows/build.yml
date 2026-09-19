@@ -1,0 +1,208 @@
+# Build official OpenWrt 25.12 for Thunder OneCloud (S805 / meson8b)
+name: Build OpenWrt OneCloud
+
+on:
+  schedule:
+    # 每月 1 号 02:00 UTC（与 N1 仓库一致）
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
+    inputs:
+      lan_ip:
+        description: "Default LAN IP"
+        required: false
+        default: "10.10.11.1"
+      use_ccache:
+        description: "Use ccache"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  TZ: Etc/UTC
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: openwrt-25.12
+  LAN_IP: ${{ inputs.lan_ip || '10.10.11.1' }}
+  USE_CCACHE: ${{ github.event_name != 'workflow_dispatch' && 'true' || (inputs.use_ccache && 'true' || 'false') }}
+  CCACHE_DIR: /workdir/openwrt/.ccache
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk + deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo docker system prune -af || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/share/swift /usr/share/miniconda \
+            /opt/microsoft /usr/local/share/powershell || true
+          sudo apt-get -y update
+          sudo apt-get -y install build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools python3-pyelftools rsync swig unzip zlib1g-dev \
+            file wget ccache device-tree-compiler libelf-dev \
+            android-sdk-libsparse-utils qemu-utils
+          sudo apt-get -y autoremove --purge
+          sudo apt-get clean
+          sudo timedatectl set-timezone "${TZ}"
+          sudo mkdir -p /workdir
+          sudo chown runner:runner /workdir
+          df -hT
+
+      - name: Clone OpenWrt ${{ env.REPO_BRANCH }}
+        working-directory: /workdir
+        run: |
+          git clone --depth=1 --single-branch --branch "${REPO_BRANCH}" "${REPO_URL}" openwrt
+          ln -sfn /workdir/openwrt "${GITHUB_WORKSPACE}/openwrt"
+          echo "OPENWRT_SHA=$(git -C openwrt rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$(date +%Y.%m.%d)" >> "$GITHUB_ENV"
+
+      - name: Cache ccache + dl
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt/.ccache
+            /workdir/openwrt/dl
+          key: onecloud-${{ env.REPO_BRANCH }}-${{ hashFiles('config/onecloud.config') }}
+          restore-keys: |
+            onecloud-${{ env.REPO_BRANCH }}-
+
+      - name: Inject target + files + feeds
+        run: |
+          cp -a target openwrt/
+          mkdir -p openwrt/files
+          cp -a files/. openwrt/files/
+          chmod +x scripts/*.sh openwrt/files/usr/sbin/onecloud-install-emmc \
+            openwrt/files/etc/uci-defaults/* openwrt/target/linux/amlogic/image/*.sh
+          cd openwrt
+          "${GITHUB_WORKSPACE}/scripts/diy-part1.sh"
+
+      - name: Update and install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: DIY part 2 + .config
+        run: |
+          cd openwrt
+          cp "${GITHUB_WORKSPACE}/config/onecloud.config" .config
+          "${GITHUB_WORKSPACE}/scripts/diy-part2.sh" "${LAN_IP}" "${USE_CCACHE}"
+          make defconfig
+          echo "---- selected packages ----"
+          grep -E '^CONFIG_PACKAGE_(luci|docker|dockerd|sing-box|homeproxy|zram|kmod-tcp-bbr|kmod-usb-net)=y' .config || true
+          grep '^CONFIG_TARGET' .config | head
+
+      - name: Download
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile
+        id: compile
+        run: |
+          cd openwrt
+          echo "threads=$(nproc)"
+          make -j$(($(nproc)+1)) || make -j1 V=s
+          echo "status=success" >> "$GITHUB_OUTPUT"
+          df -hT
+          ls -lh bin/targets/*/* || true
+
+      - name: Pack burn image fallback
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          shopt -s nullglob
+          burns=(openwrt/bin/targets/*/*/*.burn.img*)
+          if [ ${#burns[@]} -gt 0 ]; then
+            echo "burn image already produced by image Makefile"
+            exit 0
+          fi
+          echo "fallback: packing burn.img with AmlImg"
+          ver="v0.3.1"
+          curl -fsSL -o ./AmlImg \
+            "https://github.com/hzyitc/AmlImg/releases/download/${ver}/AmlImg_${ver}_linux_amd64"
+          chmod +x ./AmlImg
+          curl -fsSL -o ./uboot.img \
+            "https://github.com/hzyitc/u-boot-onecloud/releases/download/build-20221028-0940/eMMC.burn.img"
+          ./AmlImg unpack ./uboot.img burn/
+          gunzip -f openwrt/bin/targets/*/*/*emmc.img.gz 2>/dev/null || true
+          diskimg=$(ls openwrt/bin/targets/*/*/*emmc.img 2>/dev/null | head -1)
+          [ -n "$diskimg" ] || { echo "no emmc.img"; exit 0; }
+          loop=$(sudo losetup --find --show --partscan "$diskimg")
+          sudo dd if=/dev/zero of=openwrt-rootfs.img bs=1M count=800 status=none
+          sudo mkfs.ext4 -F openwrt-rootfs.img
+          mkdir -p xd img
+          sudo mount openwrt-rootfs.img xd
+          sudo mount "${loop}p2" img
+          sudo cp -a img/. xd/
+          sudo umount xd img
+          sudo img2simg "${loop}p1" burn/boot.simg
+          sudo img2simg openwrt-rootfs.img burn/rootfs.simg
+          sudo losetup -d "$loop"
+          printf "PARTITION:boot:sparse:boot.simg\nPARTITION:rootfs:sparse:rootfs.simg\n" >> burn/commands.txt
+          prefix=${diskimg%.img}
+          ./AmlImg pack "${prefix}.burn.img" burn/
+          xz -6 --threads=0 --compress "${prefix}.burn.img"
+          rm -rf burn xd img openwrt-rootfs.img uboot.img AmlImg
+
+      - name: Organize artifacts
+        id: organize
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          mkdir -p /tmp/fw
+          cp -a openwrt/bin/targets/*/* /tmp/fw/ || true
+          rm -rf /tmp/fw/packages
+          # keep images + checksums + config
+          find /tmp/fw -type f ! -name '*.img*' ! -name '*.bin*' ! -name 'sha256sums' ! -name 'config.buildinfo' ! -name '*.manifest' -delete
+          ls -lh /tmp/fw
+          echo "FIRMWARE=/tmp/fw" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: onecloud-openwrt-${{ env.RELEASE_TAG }}
+          path: /tmp/fw
+          if-no-files-found: error
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: OneCloud OpenWrt ${{ env.RELEASE_TAG }}
+          files: /tmp/fw/*
+          make_latest: true
+          body: |
+            Official OpenWrt `${{ env.REPO_BRANCH }}` (`${{ env.OPENWRT_SHA }}`) for Thunder OneCloud (S805).
+
+            | item | value |
+            | --- | --- |
+            | LAN | `${{ env.LAN_IP }}` |
+            | user / pass | `root` / `password` |
+            | timezone | `Asia/Tokyo` (JST-9) |
+
+            **First install / recovery:** `*.burn.img.xz` → Amlogic USB Burning Tool.
+            **Later updates:** `*.sysupgrade.bin` or `*.emmc.img.gz` via LuCI *Backup/Flash Firmware* (keeps u-boot + `/mnt/data`).
+            **USB → eMMC:** boot the USB image, then `onecloud-install-emmc`.
+
+      - name: Prune old releases
+        uses: dev-drprasad/delete-older-releases@master
+        continue-on-error: true
+        with:
+          keep_latest: 6
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

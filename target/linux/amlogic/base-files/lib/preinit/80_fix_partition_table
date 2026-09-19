@@ -1,0 +1,94 @@
+#!/bin/sh
+# Ensure eMMC partition layout: p2 boot flag, p3 data partition if missing
+# For burn.img (2-partition layout with p2 filling disk), auto-shrink p2 to 512MB
+# and create p3 with remaining space. Safe: only modifies p2 end sector, not start.
+
+fix_partition_table() {
+	local emmc_dev dev p2_start p2_size p2_end disk_size p3_start p3_size p2_status
+	local mbr="/tmp/mbr_fix.bin"
+
+	# Find eMMC device (type=MMC, not SD card)
+	for dev in mmcblk1 mmcblk0; do
+		[ -b "/dev/$dev" ] || continue
+		[ "$(cat /sys/block/$dev/device/type 2>/dev/null)" = "MMC" ] && emmc_dev="$dev" && break
+	done
+	[ -z "$emmc_dev" ] && return 0
+
+	disk_size=$(cat /sys/block/$emmc_dev/size 2>/dev/null)
+	[ -z "$disk_size" ] && return 0
+
+	# Read MBR
+	dd if="/dev/$emmc_dev" of="$mbr" bs=512 count=1 2>/dev/null
+	[ -s "$mbr" ] || return 0
+
+	# Parse p2 entry (offset 462): LBA start at 470, num sectors at 474
+	p2_start=$(dd if="$mbr" bs=1 skip=470 count=4 2>/dev/null | hexdump -e '1/4 "%d"')
+	p2_size=$(dd if="$mbr" bs=1 skip=474 count=4 2>/dev/null | hexdump -e '1/4 "%d"')
+	[ -z "$p2_start" ] || [ -z "$p2_size" ] && return 0
+
+	# Ensure p2 has boot flag (byte 462 should be 0x80 = 128 unsigned)
+	p2_status=$(dd if="$mbr" bs=1 skip=462 count=1 2>/dev/null | hexdump -e '1/1 "%u"')
+	[ "$p2_status" != "128" ] && printf '\x80' | dd of="$mbr" bs=1 seek=462 conv=notrunc 2>/dev/null
+
+	# If p3 already exists (offset 478, sectors at 490 > 0), nothing to do
+	p3_size_check=$(dd if="$mbr" bs=1 skip=490 count=4 2>/dev/null | hexdump -e '1/4 "%d"')
+	if [ -n "$p3_size_check" ] && [ "$p3_size_check" -gt 0 ]; then
+		echo "fix_partition_table: layout OK (p2=$((p2_size/2048))MB, p3 exists)"
+		rm -f "$mbr"
+		return 0
+	fi
+
+	# Target rootfs size: 512MB = 1048576 sectors
+	ROOTFS_SECTORS=1048576
+	# Minimum free space after shrinking: 256MB = 524288 sectors
+	MIN_DATA_SECTORS=524288
+
+	if [ "$p2_size" -gt $((ROOTFS_SECTORS + MIN_DATA_SECTORS)) ]; then
+		# p2 is too large (burn.img layout) — shrink it to 512MB
+		echo "fix_partition_table: p2=$((p2_size/2048))MB too large, shrinking to 512MB"
+
+		# Update p2 sector count to 1048576 (0x00100000 little-endian)
+		printf '\x00\x00\x10\x00' | dd of="$mbr" bs=1 seek=474 conv=notrunc 2>/dev/null
+		p2_end=$((p2_start + ROOTFS_SECTORS - 1))
+
+		# p3 starts after p2, aligned to 4MB (8192 sectors)
+		p3_start=$(( (p2_end + 1 + 8191) / 8192 * 8192 ))
+		p3_size=$((disk_size - p3_start))
+
+		if [ "$p3_size" -lt "$MIN_DATA_SECTORS" ]; then
+			echo "fix_partition_table: no space for p3 after shrink"
+			rm -f "$mbr"
+			return 0
+		fi
+	else
+		# p2 is already reasonable size; create p3 after it
+		p2_end=$((p2_start + p2_size - 1))
+		p3_start=$(( (p2_end + 1 + 8191) / 8192 * 8192 ))
+		p3_size=$((disk_size - p3_start))
+
+		if [ "$p3_size" -lt "$MIN_DATA_SECTORS" ]; then
+			echo "fix_partition_table: no space for p3 (p2=$((p2_size/2048))MB)"
+			rm -f "$mbr"
+			return 0
+		fi
+	fi
+
+	# Write p3 entry at offset 478:
+	# status=0, CHS=feffff, type=0x83(Linux), CHS=feffff, LBA start, num sectors
+	p3_start_le=$(printf '%08x' "$p3_start" | sed 's/\(..\)\(..\)\(..\)\(..\)/\\x\4\\x\3\\x\2\\x\1/')
+	p3_size_le=$(printf '%08x' "$p3_size" | sed 's/\(..\)\(..\)\(..\)\(..\)/\\x\4\\x\3\\x\2\\x\1/')
+	printf "\x00\xfe\xff\xff\x83\xfe\xff\xff${p3_start_le}${p3_size_le}" | dd of="$mbr" bs=1 seek=478 conv=notrunc 2>/dev/null
+
+	# Write MBR back and update kernel partition table
+	dd if="$mbr" of="/dev/$emmc_dev" bs=512 count=1 2>/dev/null
+	rm -f "$mbr"
+	partx -u "/dev/$emmc_dev" 2>/dev/null || partx -a "/dev/$emmc_dev" 2>/dev/null
+
+	if [ -b "/dev/${emmc_dev}p3" ]; then
+		echo "fix_partition_table: p3 created ($((p3_size/2048))MB)"
+	else
+		echo "fix_partition_table: WARNING: p3 creation failed"
+	fi
+}
+
+boot_hook_add preinit_mount_root fix_partition_table

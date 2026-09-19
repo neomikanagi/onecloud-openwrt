@@ -1,0 +1,8 @@
+.DS_Store
+openwrt/
+*.img
+*.img.gz
+*.img.xz
+*.bin
+*.swp
+.ccache/

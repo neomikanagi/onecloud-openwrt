@@ -1,0 +1,10 @@
+GNU GENERAL PUBLIC LICENSE
+Version 2, June 1991
+
+This project overlays device support onto OpenWrt, which is licensed
+under the GNU General Public License v2. See:
+
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html
+
+Device tree, u-boot and image scripts derived from community work
+(hzyitc, lxhao61, jovinleung) remain under their original licenses.

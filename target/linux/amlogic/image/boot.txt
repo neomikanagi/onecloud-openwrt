@@ -1,0 +1,48 @@
+# OpenWrt boot script for Thunder OneCloud (Amlogic S805 / meson8b)
+
+setenv condev "console=ttyAML0,115200n8 no_console_suspend consoleblank=0"
+setenv kernel_loadaddr "0x00208000"
+setenv dtb_loadaddr "0x21800000"
+
+# OneCloud: SD = mmc0, eMMC = mmc1 (SDIO Port C)
+if test -n "${emmc_dev}"; then
+    setenv root_dev "mmcblk${emmc_dev}p2"
+else
+    setenv emmc_dev "1"
+    setenv root_dev "mmcblk1p2"
+fi
+
+setenv bootargs "root=/dev/${root_dev} rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0 panic=3 oops=panic"
+
+if test -n "${mac}"; then
+    case "${mac}" in
+        *:*) setenv bootargs "${bootargs} mac=${mac}" ;;
+    esac
+fi
+
+echo "Loading kernel from eMMC ${emmc_dev}:1..."
+if fatload mmc ${emmc_dev}:1 ${kernel_loadaddr} kernel.img; then
+    if fatload mmc ${emmc_dev}:1 ${dtb_loadaddr} dtb.img; then
+        echo "Booting kernel from eMMC..."
+        bootm ${kernel_loadaddr} - ${dtb_loadaddr}
+    fi
+fi
+
+echo "Falling back to SD card (mmc0)..."
+if fatload mmc 0:1 ${kernel_loadaddr} kernel.img; then
+    setenv bootargs "root=/dev/mmcblk0p2 rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0 panic=3 oops=panic"
+    if fatload mmc 0:1 ${dtb_loadaddr} dtb.img; then
+        bootm ${kernel_loadaddr} - ${dtb_loadaddr}
+    fi
+fi
+
+echo "Falling back to USB 0..."
+usb start
+if fatload usb 0:1 ${kernel_loadaddr} kernel.img; then
+    setenv bootargs "root=/dev/sda2 rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0 panic=3 oops=panic"
+    if fatload usb 0:1 ${dtb_loadaddr} dtb.img; then
+        bootm ${kernel_loadaddr} - ${dtb_loadaddr}
+    fi
+fi
+
+echo "ERROR: Failed to load kernel or DTB"

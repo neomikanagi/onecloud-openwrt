@@ -1,0 +1,19 @@
+#!/bin/sh
+# Enable packet steering (RPS/XPS) by default for multi-core Amlogic devices.
+# The built-in packet_steering service (procd-managed, interface-triggered)
+# is more reliable than rc.local writes because it re-applies after the
+# meson8b-dwmac interface re-initializes during boot.
+
+[ -e /etc/config/network ] || exit 0
+
+# Ensure globals section exists
+uci -q get network.@globals[0] >/dev/null 2>&1 || {
+	uci set network.@globals[0]=globals
+}
+
+# Mode 2 = steer to all CPUs; 4096 flow table entries per-CPU
+uci -q set network.@globals[0].packet_steering=2
+uci -q set network.@globals[0].steering_flows=4096
+uci commit network
+
+exit 0

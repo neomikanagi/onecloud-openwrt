@@ -1,0 +1,27 @@
+# Put your custom commands here that should be executed once
+# the system init finished. By default this file does nothing.
+
+# /tmp use 80% RAM
+mount -o remount,size=80% /tmp
+
+# Load GPIO button hotplug module
+modprobe gpio_button_hotplug 2>/dev/null
+
+# --- Storage performance tuning ---
+# eMMC: larger read-ahead for sequential reads, use "none" scheduler (eMMC has FTL)
+for blk in /sys/block/mmcblk*; do
+	[ -d "$blk" ] || continue
+	# Only tune MMC devices (not SD cards unless desired)
+	type=$(cat "$blk/device/type" 2>/dev/null)
+	[ "$type" = "MMC" ] || continue
+	echo 512 > "$blk/queue/read_ahead_kb" 2>/dev/null
+	echo none > "$blk/queue/scheduler" 2>/dev/null
+done
+
+# --- Network performance tuning ---
+# Increase NIC ring buffers to max (1024) to reduce drops under bursty load
+if command -v ethtool >/dev/null 2>&1; then
+	ethtool -G eth0 rx 1024 tx 1024 >/dev/null 2>&1
+fi
+
+exit 0

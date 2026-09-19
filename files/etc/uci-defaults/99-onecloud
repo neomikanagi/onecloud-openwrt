@@ -1,0 +1,44 @@
+#!/bin/sh
+# First-boot defaults. Idempotent; uci-defaults deletes this after success.
+
+# zram: 256MB is enough on 1GB; zstd if available
+uci -q set system.@system[0].zram_comp_algo='lz4'
+uci -q set system.@system[0].zram_size_mb='256'
+uci -q set system.@system[0].zonename='Asia/Tokyo'
+uci -q set system.@system[0].timezone='JST-9'
+uci -q set luci.main.lang='zh_cn'
+
+# NTP server for LAN (same as op0)
+uci -q set system.ntp.enable_server='1'
+uci commit system
+uci commit luci
+
+# irqbalance
+[ -x /etc/init.d/irqbalance ] && /etc/init.d/irqbalance enable
+
+# WAN on USB ethernet if/when eth1 appears (phone tether / USB NIC)
+if ! uci -q get network.wan >/dev/null; then
+	uci -q set network.wan=interface
+	uci -q set network.wan.proto='dhcp'
+	uci -q set network.wan.device='eth1'
+	uci -q set network.wan.metric='10'
+	uci -q set network.wan6=interface
+	uci -q set network.wan6.proto='dhcpv6'
+	uci -q set network.wan6.device='eth1'
+	uci -q set network.wan6.reqaddress='try'
+	uci -q set network.wan6.reqprefix='auto'
+	uci -q set network.wan6.metric='10'
+	uci commit network
+	uci -q add_list firewall.@zone[1].network='wan'
+	uci -q add_list firewall.@zone[1].network='wan6'
+	uci commit firewall
+fi
+
+# Docker data-root on p3 so rootfs sysupgrade does not wipe containers
+if [ -f /etc/config/dockerd ]; then
+	uci -q set dockerd.globals.data_root='/mnt/data/docker'
+	uci commit dockerd
+	mkdir -p /mnt/data/docker
+fi
+
+exit 0
