@@ -9,16 +9,16 @@ case "$(board_name)" in
 thunder,onecloud)
 	ucidef_set_interface_lan "eth0"
 
-	# Stable MAC from eMMC CID (prefer eMMC over SD card)
+	# The SoC has no MAC in OTP, so derive a stable locally-administered
+	# one from the eMMC CID instead of getting a random MAC every boot.
 	for dev in mmcblk1 mmcblk0; do
-		[ "$(cat /sys/block/$dev/device/type 2>/dev/null)" = "MMC" ] || continue
-		cid=$(cat /sys/block/$dev/device/cid 2>/dev/null)
+		[ "$(cat "/sys/block/$dev/device/type" 2>/dev/null)" = "MMC" ] || continue
+		cid=$(cat "/sys/block/$dev/device/cid" 2>/dev/null)
 		[ -n "$cid" ] && break
 	done
 
 	if [ -n "$cid" ]; then
-		# CID bytes 2-6 (hex) form the MAC with locally-administered prefix 02
-		mac=$(printf "02:%s" "$(echo "$cid" | cut -c3-12 | sed 's/\(..\)/\1:/g; s/:$//')")
+		mac="02:$(echo "$cid" | cut -c3-12 | sed 's/\(..\)/\1:/g; s/:$//')"
 		ucidef_set_interface_macaddr "lan" "$mac"
 	fi
 	;;

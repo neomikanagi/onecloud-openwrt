@@ -1,26 +1,19 @@
 #!/bin/sh
-# Copyright (C) 2014 OpenWrt.org
-# Move sysupgrade config backup from boot partition to /
-# In rootfs-only sysupgrade mode, boot partition (p1) is not flashed.
+# Pick up the sysupgrade config backup that platform_copy_config left on
+# the FAT boot partition.
 
 move_config() {
-	local bootdev dev
+	local partdev
 
-	# Find eMMC p1 (prefer type=MMC); fall back to first available p1
-	for dev in mmcblk1p1 mmcblk0p1; do
-		[ -b "/dev/$dev" ] || continue
-		[ "$(cat /sys/block/${dev%p1}/device/type 2>/dev/null)" = "MMC" ] && bootdev="/dev/$dev" && break
-		[ -z "$bootdev" ] && bootdev="/dev/$dev"
-	done
+	. /lib/upgrade/common.sh
 
-	[ -b "$bootdev" ] || return 0
+	export_bootdevice && export_partdevice partdev 1 || return 0
 
-	mount -t vfat -o rw,noatime "$bootdev" /mnt 2>/dev/null
-	if [ -f /mnt/sysupgrade.tgz ]; then
-		cp -f /mnt/sysupgrade.tgz /sysupgrade.tgz 2>/dev/null
-		[ -f /sysupgrade.tgz ] && rm -f /mnt/sysupgrade.tgz
+	mkdir -p /boot
+	if mount -t vfat -o rw,noatime "/dev/$partdev" /boot; then
+		[ -f "/boot/$BACKUP_FILE" ] && mv -f "/boot/$BACKUP_FILE" /
+		umount /boot
 	fi
-	umount /mnt 2>/dev/null
 }
 
 boot_hook_add preinit_mount_root move_config

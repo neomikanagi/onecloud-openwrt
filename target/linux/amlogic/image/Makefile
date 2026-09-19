@@ -1,5 +1,4 @@
-#
-# Copyright (C) 2017 OpenWrt.org
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
@@ -7,49 +6,45 @@
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/image.mk
 
-# FAT boot partition size in 1024-byte blocks (CONFIG_TARGET_KERNEL_PARTSIZE is in MB)
-FAT32_BLOCKS=$(shell echo $$(($(CONFIG_TARGET_KERNEL_PARTSIZE)*1024)))
+FAT32_BLOCK_SIZE=1024
+FAT32_BLOCKS=$(shell echo $$(($(CONFIG_TARGET_KERNEL_PARTSIZE)*1024*1024/$(FAT32_BLOCK_SIZE))))
 
-# Build FAT boot partition: boot.scr + kernel.img + dtb.img
-define Build/boot-partition
+# FAT boot partition: boot.scr + uImage + dtb, exactly the layout the
+# OneCloud u-boot expects.
+define Build/boot-part
+	rm -f $@.boot
+	mkfs.fat -n BOOT -C $@.boot $(FAT32_BLOCKS)
 	mkimage -A arm -O linux -T script -C none -a 0 -e 0 -n "boot.scr" \
-		-d $(TOPDIR)/target/linux/amlogic/image/boot.txt $@.boot.scr
-	mkfs.fat -n boot -C $@ $(FAT32_BLOCKS)
-	mcopy -i $@ $@.boot.scr ::boot.scr
-	mcopy -i $@ $(IMAGE_KERNEL) ::kernel.img
-	mcopy -i $@ $(DTS_DIR)/$(DEVICE_DTS).dtb ::dtb.img
-	rm -f $@.boot.scr
+		-d boot.txt $(KDIR)/boot.scr
+	mcopy -i $@.boot $(KDIR)/boot.scr ::boot.scr
+	mcopy -i $@.boot $(IMAGE_KERNEL) ::uImage
+	$(foreach dts,$(DEVICE_DTS),mcopy -i $@.boot $(DTS_DIR)/$(dts).dtb ::dtb;)
 endef
 
-# Build eMMC disk image: bootloader + resource + MBR(boot+rootfs)
-define Build/emmc-image
-	$(TOPDIR)/target/linux/amlogic/image/gen_aml_emmc_img.sh $@.new \
-		$@ $(IMAGE_ROOTFS) \
+# MBR disk image: 4 MiB gap for the Amlogic bootloader, p1 FAT boot, p2 ext4 root.
+define Build/emmc-img
+	./gen_aml_emmc_img.sh $@ $@.boot $(IMAGE_ROOTFS) \
 		$(CONFIG_TARGET_KERNEL_PARTSIZE) $(CONFIG_TARGET_ROOTFS_PARTSIZE)
-	mv $@.new $@
+	rm -f $@.boot
 endef
 
-# Convert to Amlogic USB Burning Tool format
-define Build/aml-burn-img
-	$(TOPDIR)/target/linux/amlogic/image/gen_aml_burn_img.sh $@ $@.new
-	mv $@.new $@
-endef
-
+### Devices ###
 define Device/Default
   FILESYSTEMS := ext4
-  IMAGES := emmc.img sysupgrade.bin burn.img
   KERNEL_DEPENDS = $$(wildcard $(DTS_DIR)/$$(DEVICE_DTS).dts)
-  KERNEL_LOADADDR := 0x00208000
   KERNEL_NAME := Image
+  KERNEL_LOADADDR := 0x00208000
   KERNEL := kernel-bin | uImage none
+  IMAGES := sysupgrade.img.gz
+  IMAGE/sysupgrade.img.gz := boot-part | emmc-img | gzip | append-metadata
+  PROFILES = Default $$(DEVICE_NAME)
 endef
 
 define Device/thunder-onecloud
+  DEVICE_VENDOR := Thunder
+  DEVICE_MODEL := OneCloud
   DEVICE_DTS := amlogic/meson8b-onecloud
-  DEVICE_TITLE := Thunder OneCloud
-  IMAGE/emmc.img := boot-partition | emmc-image
-  IMAGE/sysupgrade.bin := boot-partition | emmc-image | append-metadata
-  IMAGE/burn.img := boot-partition | emmc-image | aml-burn-img
+  SUPPORTED_DEVICES := thunder,onecloud
 endef
 
 ifeq ($(SUBTARGET),meson8b)

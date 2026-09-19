@@ -1,16 +1,20 @@
 #!/bin/sh
-# onecloud-install-emmc — Armbian-install analog for OneCloud OpenWrt.
+# onecloud-install-emmc - write an OpenWrt image to the OneCloud eMMC.
 #
-# After the box has been line-flashed once (u-boot on eMMC can USB-boot):
-#   1. Write the same emmc.img to a USB stick, boot from USB
-#   2. Run: onecloud-install-emmc
-#      copies running USB p1+p2 onto eMMC p1+p2 (u-boot and data p3 kept)
+# The counterpart of armbian-install. Boot the box from a USB stick (or SD
+# card) that was written with the OpenWrt image, then run this to move the
+# system onto eMMC.
 #
-# Or flash a downloaded image while already on eMMC (same as sysupgrade):
-#   onecloud-install-emmc /tmp/openwrt-*-emmc.img.gz
+#   onecloud-install-emmc [image.img.gz]
 #
-# Does NOT rewrite Amlogic bootloader. First-time from stock Android still
-# needs USB Burning Tool + *.burn.img.
+# With no argument it looks for an image on the boot partition of the
+# medium you are running from.
+#
+# Only the two partitions declared by the image are written: p1 (FAT boot)
+# and p2 (ext4 root). The Amlogic bootloader in front of the partition
+# table is never touched, so this cannot brick the box. A device that has
+# never been flashed has no bootloader at all and still needs the USB
+# Burning Tool with the .burn.img once.
 
 set -e
 
@@ -18,86 +22,98 @@ YES=0
 IMG=""
 while [ $# -gt 0 ]; do
 	case "$1" in
-		-y|--yes) YES=1 ;;
-		-h|--help)
-			sed -n '2,16p' "$0"
-			exit 0
-			;;
-		*) IMG="$1" ;;
+	-y|--yes) YES=1 ;;
+	-h|--help) sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	-*) echo "unknown option: $1" >&2; exit 1 ;;
+	*) IMG="$1" ;;
 	esac
 	shift
 done
 
+die() { echo "onecloud-install-emmc: $*" >&2; exit 1; }
+
 find_emmc() {
 	local dev
-	for dev in mmcblk1 mmcblk0; do
+	for dev in mmcblk0 mmcblk1 mmcblk2; do
 		[ -b "/dev/$dev" ] || continue
-		[ "$(cat /sys/block/$dev/device/type 2>/dev/null)" = "MMC" ] && { echo "$dev"; return 0; }
+		[ "$(cat "/sys/block/$dev/device/type" 2>/dev/null)" = "MMC" ] || continue
+		echo "$dev"
+		return 0
 	done
 	return 1
 }
 
-root_src=$(awk '$2=="/"{print $1}' /proc/mounts | head -1)
-emmc=$(find_emmc) || { echo "ERROR: no eMMC"; exit 1; }
+uncat() {
+	case "$(hexdump -v -n 2 -e '1/1 "%02x"' "$1")" in
+	1f8b) gzip -dc "$1" ;;
+	*) cat "$1" ;;
+	esac
+}
 
-echo "eMMC     : /dev/$emmc"
-echo "root src : $root_src"
+emmc=$(find_emmc) || die "no eMMC found"
+root_src=$(awk '$2=="/"{print $1; exit}' /proc/mounts)
 
-if [ -n "$IMG" ]; then
-	[ -f "$IMG" ] || { echo "ERROR: $IMG not found"; exit 1; }
-	echo "image    : $IMG"
-	echo "Will sysupgrade p1+p2 from image (u-boot + p3 kept)."
-	if [ "$YES" != 1 ]; then
-		printf "Type yes to continue: "
-		read ans
-		[ "$ans" = "yes" ] || exit 1
+case "$root_src" in
+/dev/${emmc}p*) die "already running from eMMC - use sysupgrade instead" ;;
+esac
+
+# No image given: look for one next to the kernel on the medium we booted.
+if [ -z "$IMG" ]; then
+	mkdir -p /tmp/srcboot
+	case "$root_src" in
+	/dev/sd*) src_boot="${root_src%2}1" ;;
+	/dev/mmcblk*p2) src_boot="${root_src%2}1" ;;
+	*) src_boot="" ;;
+	esac
+	if [ -n "$src_boot" ] && mount -t vfat -o ro "$src_boot" /tmp/srcboot 2>/dev/null; then
+		IMG=$(ls /tmp/srcboot/*.img.gz /tmp/srcboot/*.img 2>/dev/null | head -1)
+		[ -n "$IMG" ] && cp "$IMG" /tmp/install.img && IMG=/tmp/install.img
+		umount /tmp/srcboot
 	fi
-	# Reuse platform.sh if present, else invoke sysupgrade
-	if [ -x /sbin/sysupgrade ]; then
-		sysupgrade -n "$IMG"
-	else
-		echo "ERROR: sysupgrade missing"
-		exit 1
-	fi
-	exit 0
 fi
 
-case "$root_src" in
-	/dev/${emmc}p2|/dev/${emmc}p2p*)
-		echo "Already running from eMMC. Pass an image to upgrade:"
-		echo "  $0 /tmp/xxx-emmc.img.gz"
-		exit 1
-		;;
-esac
+[ -n "$IMG" ] || die "no image given and none found on the boot partition"
+[ -f "$IMG" ] || die "$IMG not found"
 
-src_boot=""
-src_root=""
-case "$root_src" in
-	/dev/sd*[0-9])
-		disk=${root_src%%[0-9]*}
-		src_boot="${disk}1"
-		src_root="${disk}2"
-		;;
-	/dev/mmcblk0p2)
-		src_boot="/dev/mmcblk0p1"
-		src_root="/dev/mmcblk0p2"
-		;;
-	*)
-		echo "ERROR: unsupported root $root_src (need USB/SD)"
-		exit 1
-		;;
-esac
+# Read the image partition table.
+uncat "$IMG" | dd of=/tmp/install.mbr bs=512 count=1 2>/dev/null
+[ "$(hexdump -v -n 2 -s 510 -e '1/1 "%02x"' /tmp/install.mbr)" = "55aa" ] ||
+	die "$IMG is not a disk image (no MBR signature)"
 
-echo "copy $src_boot -> /dev/${emmc}p1"
-echo "copy $src_root -> /dev/${emmc}p2"
+echo "image  : $IMG"
+echo "target : /dev/$emmc"
+
+n=1
+while [ $n -le 2 ]; do
+	off=$((0x1BE + (n - 1) * 16))
+	set -- $(hexdump -v -n 8 -s $((off + 8)) -e '2/4 "%u "' /tmp/install.mbr)
+	eval "start$n=$1; size$n=$2"
+	[ "$2" -gt 0 ] || die "image partition $n is empty"
+	have=$(cat "/sys/class/block/${emmc}p${n}/size" 2>/dev/null || echo 0)
+	[ "$have" -gt 0 ] || die "/dev/${emmc}p${n} does not exist - flash the .burn.img first"
+	[ "$2" -le "$have" ] ||
+		die "image partition $n needs $2 sectors, /dev/${emmc}p${n} only has $have"
+	echo "  p$n: $(( $2 / 2048 )) MiB -> /dev/${emmc}p${n}"
+	n=$((n + 1))
+done
+
 if [ "$YES" != 1 ]; then
-	printf "Type yes to continue: "
+	printf "This overwrites the system on eMMC. Type yes to continue: "
 	read ans
 	[ "$ans" = "yes" ] || exit 1
 fi
 
 sync
-dd if="$src_boot" of="/dev/${emmc}p1" bs=4M conv=fsync status=progress
-dd if="$src_root" of="/dev/${emmc}p2" bs=4M conv=fsync status=progress
+n=1
+while [ $n -le 2 ]; do
+	eval "start=\$start$n; size=\$size$n"
+	echo "writing p$n ..."
+	uncat "$IMG" | dd of="/dev/${emmc}p${n}" ibs=512 obs=1M \
+		skip="$start" count="$size" conv=fsync 2>/dev/null
+	n=$((n + 1))
+done
 sync
-echo "Done. Power off, unplug USB, boot from eMMC."
+rm -f /tmp/install.mbr
+
+echo
+echo "Done. Power off, remove the USB stick, power on."

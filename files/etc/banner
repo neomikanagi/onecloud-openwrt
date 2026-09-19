@@ -3,9 +3,8 @@
    / / / / __ \/ _ \/ __ \ | /| / / ___/ __/     / /   / /| | / __  |
   / /_/ / /_/ /  __/ / / / |/ |/ / /  / /_      / /___/ ___ |/ /_/ /
   \____/ .___/\___/_/ /_/|__/|__/_/   \__/     /_____/_/  |_/_____/
-      /_/  OneCloud  ·  official OpenWrt 25.12  ·  meson8b
-───────────────────────────────────────────────────────────────────────
- LAN: 10.10.11.1   user: root   pass: password
- Update: System → Backup/Flash Firmware  (sysupgrade, keeps u-boot + /mnt/data)
- Install to eMMC from USB:  onecloud-install-emmc
-───────────────────────────────────────────────────────────────────────
+      /_/   Thunder OneCloud  ·  Amlogic S805  ·  meson8b
+ ---------------------------------------------------------------------
+  Update : LuCI -> System -> Backup / Flash Firmware -> sysupgrade
+  To eMMC: onecloud-install-emmc   (when booted from USB)
+ ---------------------------------------------------------------------

@@ -1,48 +1,40 @@
-# OpenWrt boot script for Thunder OneCloud (Amlogic S805 / meson8b)
+# OpenWrt boot script for Thunder OneCloud (Amlogic S805 / meson8b).
+#
+# Compiled to boot.scr and placed on the FAT boot partition. Kept to the
+# subset of U-Boot hush that the stock OneCloud u-boot understands:
+# setenv / test / if-then-fi / fatload / bootm only. No case, no for.
 
 setenv condev "console=ttyAML0,115200n8 no_console_suspend consoleblank=0"
 setenv kernel_loadaddr "0x00208000"
 setenv dtb_loadaddr "0x21800000"
+setenv bootargs_common "rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0"
 
-# OneCloud: SD = mmc0, eMMC = mmc1 (SDIO Port C)
-if test -n "${emmc_dev}"; then
-    setenv root_dev "mmcblk${emmc_dev}p2"
-else
-    setenv emmc_dev "1"
-    setenv root_dev "mmcblk1p2"
+# 1) eMMC (mmc 1) - the normal path
+if fatload mmc 1 ${kernel_loadaddr} uImage; then
+	if fatload mmc 1 ${dtb_loadaddr} dtb; then
+		echo "OneCloud: booting from eMMC"
+		setenv bootargs "root=/dev/mmcblk1p2 ${bootargs_common}"
+		bootm ${kernel_loadaddr} - ${dtb_loadaddr}
+	fi
 fi
 
-setenv bootargs "root=/dev/${root_dev} rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0 panic=3 oops=panic"
-
-if test -n "${mac}"; then
-    case "${mac}" in
-        *:*) setenv bootargs "${bootargs} mac=${mac}" ;;
-    esac
+# 2) SD card (mmc 0)
+if fatload mmc 0 ${kernel_loadaddr} uImage; then
+	if fatload mmc 0 ${dtb_loadaddr} dtb; then
+		echo "OneCloud: booting from SD"
+		setenv bootargs "root=/dev/mmcblk0p2 ${bootargs_common}"
+		bootm ${kernel_loadaddr} - ${dtb_loadaddr}
+	fi
 fi
 
-echo "Loading kernel from eMMC ${emmc_dev}:1..."
-if fatload mmc ${emmc_dev}:1 ${kernel_loadaddr} kernel.img; then
-    if fatload mmc ${emmc_dev}:1 ${dtb_loadaddr} dtb.img; then
-        echo "Booting kernel from eMMC..."
-        bootm ${kernel_loadaddr} - ${dtb_loadaddr}
-    fi
-fi
-
-echo "Falling back to SD card (mmc0)..."
-if fatload mmc 0:1 ${kernel_loadaddr} kernel.img; then
-    setenv bootargs "root=/dev/mmcblk0p2 rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0 panic=3 oops=panic"
-    if fatload mmc 0:1 ${dtb_loadaddr} dtb.img; then
-        bootm ${kernel_loadaddr} - ${dtb_loadaddr}
-    fi
-fi
-
-echo "Falling back to USB 0..."
+# 3) USB - used to boot the installer when eMMC has no system yet
 usb start
-if fatload usb 0:1 ${kernel_loadaddr} kernel.img; then
-    setenv bootargs "root=/dev/sda2 rootfstype=ext4 rootwait ro ${condev} fsck.repair=yes net.ifnames=0 panic=3 oops=panic"
-    if fatload usb 0:1 ${dtb_loadaddr} dtb.img; then
-        bootm ${kernel_loadaddr} - ${dtb_loadaddr}
-    fi
+if fatload usb 0 ${kernel_loadaddr} uImage; then
+	if fatload usb 0 ${dtb_loadaddr} dtb; then
+		echo "OneCloud: booting from USB"
+		setenv bootargs "root=/dev/sda2 ${bootargs_common}"
+		bootm ${kernel_loadaddr} - ${dtb_loadaddr}
+	fi
 fi
 
-echo "ERROR: Failed to load kernel or DTB"
+echo "OneCloud: no bootable kernel found on eMMC, SD or USB"

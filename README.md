@@ -1,103 +1,114 @@
-# onecloud-openwrt
+# OneCloud OpenWrt
 
-玩客云（迅雷 OneCloud / Amlogic S805 / meson8b，32 位）的 **官方 OpenWrt 25.12** 精简固件。
+玩客云（Thunder OneCloud，Amlogic S805 / meson8b，32 位）的 OpenWrt 固件。
 
-每月 1 号云编译。源码是 [openwrt/openwrt](https://github.com/openwrt/openwrt) 的 `openwrt-25.12` 稳定分支，设备支持用自定义 `target/linux/amlogic` 注入（官方 24.10+ 已删除 32 位 meson8b target）。
+源码是官方 [openwrt/openwrt](https://github.com/openwrt/openwrt) 的 `openwrt-25.12` 稳定分支。官方源码树里没有 S805 的 target，设备支持（设备树、6.12 内核补丁、镜像打包）由本仓库的 `target/linux/amlogic` 提供。
 
-## 默认
+每月 1 号自动云编译一次，产物发在 [Releases](../../releases)。
+
+## 下载哪个文件
+
+| 文件 | 什么时候用 |
+| --- | --- |
+| `*-emmc.burn.img.xz` | 第一次刷机，或者刷坏了要救砖 |
+| `*-sysupgrade.img.gz` | 已经装好了，之后每次升级 |
+
+## 第一次刷机
+
+玩客云出厂只认晶晨的 USB 刷机协议，也没有 TF 卡槽，所以第一次必须线刷一次，把 u-boot 写进 eMMC。
+
+1. 解压 `*-emmc.burn.img.xz`
+2. 装 [Amlogic USB Burning Tool](https://androiddatahost.com/khfj4)，导入镜像
+3. 拆机，短接主板上的刷机触点（或按住机内的小按钮），用双公头 USB 线接电脑，通电
+4. 点开始，等进度走完
+
+红灯闪 = 正在启动，蓝灯呼吸 = 已经起来了。第一次启动要多等一会儿，它在把根分区扩容到整块 eMMC。
+
+启动完成后浏览器打开 `http://10.10.10.1`。
+
+## 之后怎么升级
+
+这是这个仓库存在的主要理由：**刷过一次之后就不用再拆机线刷了。**
+
+LuCI → 系统 → 备份/升级 → 刷写新的固件，选 `*-sysupgrade.img.gz`。或者命令行：
+
+```bash
+sysupgrade -v /tmp/openwrt-*-sysupgrade.img.gz
+```
+
+升级只写引导分区和根分区，**不碰 u-boot**，所以升级失败也不会变砖，大不了再线刷一次。勾选「保留配置」会把 `/etc` 备份带到新系统里。
+
+## 从 U 盘装进 eMMC
+
+已经有 u-boot 的机器（也就是线刷过至少一次的），可以把镜像写进 U 盘启动，再装到 eMMC：
+
+```bash
+# 电脑上：把镜像写进 U 盘
+gzip -dc openwrt-*-sysupgrade.img.gz | sudo dd of=/dev/sdX bs=4M status=progress
+
+# 插上 U 盘开机，进系统后：
+onecloud-install-emmc
+```
+
+引导脚本的顺序是 eMMC → SD → USB，所以 eMMC 里已经有能启动的系统时不会走 U 盘。
+
+## 默认配置
 
 | 项 | 值 |
 | --- | --- |
-| LAN | `10.10.11.1/24`（对应 ssh host `op1`；N1/`op0` 已占用 `10.10.10.1`） |
-| 用户 / 密码 | `root` / `password` |
-| 主机名 | `op1` |
-| 时区 / NTP | `Asia/Tokyo`；`time.windows.com` `time.apple.com` `time.google.com` `time.aws.com` `time.cloudflare.com`，并开 NTP server |
-| WAN | `eth1` DHCP（USB 网卡 / 手机共享），没有就不工作，LAN 仍可用 |
-| LuCI | 官方 luci + bootstrap + 简体中文 |
+| LAN | `10.10.10.1/24` |
+| 用户名 / 密码 | `root` / `password`（请尽快改） |
+| 主机名 | `OneCloud` |
+| 时区 | `Asia/Tokyo` |
+| Web 界面 | 官方 LuCI，简体中文 |
 | 防火墙 | firewall4 / nftables |
 
-## 装了什么 / 砍了什么
+玩客云只有一个 100M 网口。想当主路由用的话，WAN 需要插 USB 网卡或者手机 USB 共享网络，固件里已经预置了 `eth1` 的 DHCP WAN 口，插上就能用；不插也不影响 LAN。
 
-**留：** Docker 全家桶 + `luci-app-dockerman`（数据目录 `/mnt/data/docker`，sysupgrade 不丢容器）、HomeProxy + sing-box、zram、BBR+fq、irqbalance、packet_steering、ttyd、UPnP、USB 存储、手机共享/USB 网卡驱动、常见 USB WiFi（mt76u / rtl8xxxu / rt2800）、WireGuard、SFTP。
+## 包含
 
-**砍：** LXC、晶晨宝盒 `luci-app-amlogic`、Samba、DDNS、frp、mosdns、Argon、Passwall、SQM、attended sysupgrade。
+- 官方 LuCI + 简体中文
+- Docker + Docker Compose + LuCI 管理界面
+- HomeProxy（sing-box）
+- zram 压缩交换分区、BBR、irqbalance、多核软中断分流
+- USB 存储（ext4 / vfat / exfat / ntfs3 / f2fs）
+- USB 网卡（RTL8152、AX88179、ASIX、SMSC95xx）、安卓 / iPhone USB 共享网络、4G 上网卡
+- 常见 USB 无线网卡（MT7601U、MT76x0U、MT76x2U、RTL8XXXU、RT2800）
+- WireGuard、UPnP、ttyd 网页终端
 
-**不装 mosdns 的原因：** 现网 `op0` 的 DNS 已经是 `dnsmasq:53 → sing-box/homeproxy:5333`（DoH + 广告规则集）。mosdns 会再加一层 Go 进程和配置，和 HomeProxy 功能重叠，1GB/32 位上是负担，不是免费升级。
+Docker 数据默认放在根分区，升级时会被覆盖。经常用 Docker 的话建议插一个 U 盘或硬盘，在 LuCI 的 Docker 设置里把数据目录指到挂载点上。
 
-玩客云只有 1GB RAM + 32 位。Docker 镜像大量是 aarch64，能跑的是 `linux/arm/v7`。这是硬件限制，不是固件漏装。
+## 已知限制
 
-## 刷机与更新
-
-### 第一次（或变砖）
-
-1. Releases 里下 `*emmc.burn.img.xz`
-2. [Amlogic USB Burning Tool](https://androiddatahost.com/khfj4) + 双公头 USB
-3. 红灯闪 = 启动中，蓝灯心跳 = 起来了（第一次可能要几分钟）
-
-### 以后每月更新（这才是重点）
-
-已经刷过一次、eMMC 上是这套分区之后：
-
-- LuCI → 系统 → 备份/升级，刷 `*sysupgrade.bin` 或 `*emmc.img.gz`
-- 或 SSH：`sysupgrade -n /tmp/xxx.img.gz`（要保留配置去掉 `-n`）
-
-脚本只写 **p1 boot（内核+dtb）+ p2 rootfs**，**不动 u-boot，不动 p3 `/mnt/data`**。
-
-剩余 eMMC 第一次启动会建成 p3，挂在 `/mnt/data`。Docker 默认写这里。
-
-### USB 卡刷进 eMMC（armbian-install 同类）
-
-前提：机器已经线刷过一次（u-boot 能 USB 启动）。
-
-1. 把 `*emmc.img` dd 到 U 盘
-2. 串口打断 u-boot，或等 eMMC 失败后自动尝试 USB（`boot.txt` 有 USB fallback）
-3. 进系统后：
-
-```sh
-onecloud-install-emmc          # 把当前 USB 系统拷到 eMMC p1+p2
-# 或
-onecloud-install-emmc /tmp/xxx-emmc.img.gz
-```
-
-全网以前几乎没有这条路径，不是做不出来，是打包方式决定的。见下面。
-
-## 为什么以前没有「卡刷进 eMMC」的玩客云 OpenWrt
-
-N1 能 `openwrt-install` / Armbian 能 `armbian-install`，玩客云 OpenWrt 却几乎全是线刷包或让你插着 U 盘用。原因不是 magick，是三件事叠在一起：
-
-1. **引导协议不同。** 玩客云出厂是晶晨 USB Burning 协议。没有 TF 卡槽。第一次进任何非安卓系统，都必须用 `burn.img` 把 u-boot 写进 eMMC。N1 的 u-boot 已经能从 USB/SD 起完整 Linux，所以「先 U 盘再 install」是默认故事。
-
-2. **打包目标不同。** N1/ophub 走的是 **通用 aarch64 rootfs tarball + flippy 内核 + luci-app-amlogic**：镜像是「可安装的系统」，install 脚本负责分区、拷文件、写 u-boot。玩客云社区（LEDE / 各种 Actions）走的是 **整盘 eMMC 镜像**，再额外打成 Burning Tool 格式。产物是「整盘快照」，不是「可 sysupgrade 的设备」。`IMAGES := emmc.img`，没有 `sysupgrade.bin`，`platform.sh` 也是空的。所以你只能再线刷一次。
-
-3. **官方已经删了 32 位 meson8b。** OpenWrt 24.10+ 和 ImmortalWrt 都不再带这个 target。社区各自抄一份 DTS + 自己的 image Makefile，大多数人只做到「能烧进去」，没有把 OpenWrt 的 `sysupgrade` / `emmc_do_upgrade` 接上。接上之后，更新路径就是普通路由器那条，不需要 armbian-install。
-
-**能做出来。** 本仓库做了三件事：
-
-- 官方 25.12 源码 + 注入 meson8b-onecloud target（DTS / 6.12 内核补丁 / u-boot 打包）
-- 同时打出 `burn.img`（第一次）、`emmc.img`（U 盘）、`sysupgrade.bin`（以后）
-- `platform.sh` 按分区写 p1+p2；`onecloud-install-emmc` 给「已经能 USB 启动」的机器一条和 armbian-install 同类的命令
-
-第一次仍然要线刷一次——这是晶晨 ROM 决定的，谁也跳不过。线刷过之后，更新不再拆机、不再双公头。
+- S805 是 32 位 ARM。Docker 只能跑 `linux/arm/v7` 的镜像，很多只发 `arm64` 的镜像用不了，这是 CPU 决定的。
+- 1GB 内存 + 100M 网口。当旁路由 / 软路由 / 轻量 NAS 没问题，别指望跑满千兆。
+- 没有内置无线，需要无线得插 USB 网卡。
 
 ## 自己编译
 
-GitHub Actions → **Build OpenWrt OneCloud** → Run workflow。或 fork 后等每月 1 号。
+Actions → **Build OpenWrt OneCloud** → Run workflow，可以改 LAN IP。
 
-本地（Linux x86_64，磁盘 > 30G）：
+本地编译（Linux x86_64，空闲磁盘 30G 以上）：
 
-```sh
+```bash
 git clone --depth=1 -b openwrt-25.12 https://github.com/openwrt/openwrt.git
-cp -a target files openwrt/
+git clone https://github.com/neomikanagi/onecloud-openwrt.git custom
+cp -a custom/target custom/files openwrt/
 cd openwrt
 ./scripts/feeds update -a && ./scripts/feeds install -a
-cp ../config/onecloud.config .config
-../scripts/diy-part2.sh 10.10.11.1 true
+cp ../custom/config/onecloud.config .config
+../custom/scripts/diy-part2.sh 10.10.10.1 true
+./scripts/feeds install -a
 make defconfig
-make -j$(nproc)
+make -j"$(nproc)"
 ```
 
-## 参考
+## 致谢
 
-- 设备树 / u-boot：[hzyitc/u-boot-onecloud](https://github.com/hzyitc/u-boot-onecloud)、[hzyitc/AmlImg](https://github.com/hzyitc/AmlImg)
-- target 参考：[lxhao61/OneCloud-OpenWrt](https://github.com/lxhao61/OneCloud-OpenWrt)（官方 25.12 + 6.12）、[jovinleung/OneCloud](https://github.com/jovinleung/OneCloud)（sysupgrade / burn 脚本）
-- N1 定制层：`neomikanagi/amlogic-s9xxx-openwrt`（IP/NTP/HomeProxy/Docker 取向）
+- [hzyitc/u-boot-onecloud](https://github.com/hzyitc/u-boot-onecloud)、[hzyitc/AmlImg](https://github.com/hzyitc/AmlImg) — u-boot 和晶晨刷机包打包工具
+- [lxhao61/OneCloud-OpenWrt](https://github.com/lxhao61/OneCloud-OpenWrt)、[shiyu1314/openwrt-onecloud](https://github.com/shiyu1314/openwrt-onecloud) — S805 设备树与镜像打包的参考
+- [immortalwrt/homeproxy](https://github.com/immortalwrt/homeproxy)
+
+## 许可
+
+GPL-2.0，同 OpenWrt。
