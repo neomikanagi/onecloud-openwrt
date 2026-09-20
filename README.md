@@ -15,14 +15,14 @@
 
 ## 第一次刷机
 
-玩客云出厂只认晶晨的 USB 刷机协议，也没有 TF 卡槽，所以第一次必须线刷一次，把 u-boot 写进 eMMC。
+玩客云出厂只认晶晨的 USB 刷机协议，也没有 TF 卡槽。现在跑的如果是 Armbian，eMMC 里虽然已经有 u-boot，**最省事仍是再线刷一次** OpenWrt 的 burn 包（覆盖 u-boot + 系统）。U 盘安装路径见下面；引导顺序是 eMMC → USB，eMMC 里还有 Armbian 时插 U 盘也进不去 OpenWrt。
 
 1. 解压 `*-emmc.burn.img.xz`
 2. 装 [Amlogic USB Burning Tool](https://androiddatahost.com/khfj4)，导入镜像
 3. 拆机，短接主板上的刷机触点（或按住机内的小按钮），用双公头 USB 线接电脑，通电
 4. 点开始，等进度走完
 
-红灯闪 = 正在启动，蓝灯呼吸 = 已经起来了。第一次启动要多等一会儿，它在把根分区扩容到整块 eMMC。
+红灯闪 = 正在启动，蓝灯呼吸 = 已经起来了。第一次启动要多等一会儿：**根分区会自动扩容到整块 eMMC**（8GB 机器不用再跑任何脚本）。
 
 启动完成后浏览器打开 `http://10.10.10.1`。
 
@@ -30,7 +30,7 @@
 
 这是这个仓库存在的主要理由：**刷过一次之后就不用再拆机线刷了。**
 
-LuCI → 系统 → 备份/升级 → 刷写新的固件，选 `*-sysupgrade.img.gz`。或者命令行：
+就是传统的 OpenWrt 网页升级。LuCI → 系统 → 备份/升级 → 刷写新的固件，选 `*-sysupgrade.img.gz`。或者命令行：
 
 ```bash
 sysupgrade -v /tmp/openwrt-*-sysupgrade.img.gz
@@ -40,7 +40,7 @@ sysupgrade -v /tmp/openwrt-*-sysupgrade.img.gz
 
 ## 从 U 盘装进 eMMC
 
-已经有 u-boot 的机器（也就是线刷过至少一次的），可以把镜像写进 U 盘启动，再装到 eMMC：
+已经有 u-boot、并且能从 U 盘启动时（eMMC 里没有可启动系统，或你在 u-boot 里手动指定了 USB），可以把镜像写进 U 盘再装到 eMMC：
 
 ```bash
 # 电脑上：把镜像写进 U 盘
@@ -50,7 +50,7 @@ gzip -dc openwrt-*-sysupgrade.img.gz | sudo dd of=/dev/sdX bs=4M status=progress
 onecloud-install-emmc
 ```
 
-引导脚本的顺序是 eMMC → SD → USB，所以 eMMC 里已经有能启动的系统时不会走 U 盘。
+引导脚本的顺序是 eMMC → SD → USB。eMMC 里已经有能启动的系统时不会走 U 盘。从 Armbian 换过来请用上面的线刷，不要走这条。
 
 ## 默认配置
 
@@ -59,7 +59,8 @@ onecloud-install-emmc
 | LAN | `10.10.10.1/24` |
 | 用户名 / 密码 | `root` / `password`（请尽快改） |
 | 主机名 | `OneCloud` |
-| 时区 | `Asia/Tokyo` |
+| 时区 | `Asia/Tokyo`（JST-9，不是上海） |
+| Reset 键 | 开机过程中按一下进 failsafe；开机后按住约 5 秒恢复出厂 |
 | Web 界面 | 官方 LuCI，简体中文 |
 | 防火墙 | firewall4 / nftables |
 

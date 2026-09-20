@@ -15,10 +15,9 @@ git clone --depth=1 https://github.com/immortalwrt/homeproxy.git package/homepro
 # LAN address
 sed -i "s/192\.168\.1\.1/${LAN_IP}/g" "$CFG"
 
-# Hostname / timezone
+# Hostname. Timezone (Asia/Tokyo) is set in files/etc/uci-defaults/99-onecloud:
+# 25.12's config_generate uses timezone='GMT0', so sed on timezone='UTC' misses.
 sed -i "s/hostname='OpenWrt'/hostname='OneCloud'/g" "$CFG"
-sed -i "s/timezone='UTC'/timezone='JST-9'/g" "$CFG"
-sed -i "/timezone='JST-9'/a\\		set system.@system[-1].zonename='Asia/Tokyo'" "$CFG"
 
 # NTP pool -> reachable public servers, plus keep serving time on the LAN
 sed -i 's/0\.openwrt\.pool\.ntp\.org/time.windows.com/' "$CFG"

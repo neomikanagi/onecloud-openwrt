@@ -17,6 +17,7 @@
 # Burning Tool with the .burn.img once.
 
 set -e
+set -o pipefail
 
 YES=0
 IMG=""

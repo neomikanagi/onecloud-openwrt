@@ -124,6 +124,10 @@ jobs:
           done < <(grep -E '^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=y$' "${GITHUB_WORKSPACE}/config/onecloud.config")
           grep -qx 'CONFIG_TARGET_amlogic_meson8b_DEVICE_thunder-onecloud=y' .config || {
             echo "MISSING: target device"; missing=1; }
+          grep -qx 'CONFIG_KERNEL_ZRAM_BACKEND_LZ4=y' .config || {
+            echo "MISSING: CONFIG_KERNEL_ZRAM_BACKEND_LZ4"; missing=1; }
+          grep -qx 'CONFIG_KERNEL_ZRAM_DEF_COMP_LZ4=y' .config || {
+            echo "MISSING: CONFIG_KERNEL_ZRAM_DEF_COMP_LZ4"; missing=1; }
           [ "$missing" = 0 ] || { echo "::error::defconfig dropped packages, aborting before a 3 hour build"; exit 1; }
           echo "all requested packages present"
 

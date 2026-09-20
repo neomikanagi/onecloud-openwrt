@@ -6,6 +6,11 @@
 uci -q set system.@system[0].zram_size_mb='512'
 uci -q set system.@system[0].zram_comp_algo='lz4'
 
+# Tokyo. Set here, not by sed on config_generate: OpenWrt 25.12 uses
+# timezone='GMT0' / zonename='UTC', so a 'timezone=UTC' substitution misses.
+uci -q set system.@system[0].timezone='JST-9'
+uci -q set system.@system[0].zonename='Asia/Tokyo'
+
 # Serve time to the LAN as well as sync from upstream.
 uci -q set system.ntp.enable_server='1'
 
