@@ -1,0 +1,130 @@
+# Copyright (C) 2026 OpenWrt.org
+#
+# Grow the shipped ext4 rootfs into the real eMMC partition.
+#
+# The image's ext4 is produced by make_ext4fs, whose resize_inode layout the
+# kernel's online resizer rejects:
+#   EXT4-fs warning: reserve_backup_gdb: reserved block 40 not at offset 39
+# so "resize2fs /dev/mmcblk1p2" on the mounted root fails with EINVAL.
+#
+# An offline resize handles it, and a loop device is enough to get one:
+# e2fsck/resize2fs decide "mounted or not" by looking the device up in
+# /proc/mounts, and /dev/loopN is not there. Root is remounted read-only
+# first so the kernel cannot write its stale superblock back over the
+# result, and the box reboots straight after instead of continuing to boot
+# on metadata the running kernel no longer agrees with.
+#
+# Runs at preinit, before do_mount_root, while nothing else is running.
+
+RESIZE_LOG=/boot/resize.log
+
+resize_log() {
+	echo "$*" >> "$RESIZE_LOG" 2>/dev/null
+	echo "resize-rootfs: $*" > /dev/console 2>/dev/null
+}
+
+resize_ext4_root() {
+	local rootdev part bootdev part_kb fs_kb attempts loop n rc
+
+	[ "$INITRAMFS" = "1" ] && return 0
+
+	rootdev=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline)
+	[ -n "$rootdev" ] && [ -b "$rootdev" ] || return 0
+	part=${rootdev#/dev/}
+	case "$part" in
+		mmcblk*p2) bootdev=/dev/${part%p2}p1 ;;
+		*) return 0 ;;
+	esac
+	[ -b "$bootdev" ] || return 0
+
+	[ -x /usr/sbin/losetup ] && [ -x /usr/sbin/e2fsck ] && \
+		[ -x /usr/sbin/resize2fs ] || return 0
+
+	mkdir -p /boot
+	mount -t vfat -o rw,noatime "$bootdev" /boot 2>/dev/null || return 0
+
+	part_kb=$(awk -v p="$part" '$4 == p { print $3 }' /proc/partitions)
+	fs_kb=$(df -k / 2>/dev/null | awk 'NR == 2 { print $2 }')
+
+	# Within 20% of the partition already, or the numbers make no sense:
+	# nothing to do. Clear the guards so a later sysupgrade can resize again.
+	if [ -z "$part_kb" ] || [ -z "$fs_kb" ] || [ "$part_kb" -le 0 ] ||
+	   [ $((fs_kb * 10)) -ge $((part_kb * 8)) ]; then
+		rm -f /boot/.resize-attempts /boot/.resize-skip
+		umount /boot 2>/dev/null
+		return 0
+	fi
+
+	# Two tries, then stay out of the way for good: a resize that keeps
+	# failing must never turn into a boot loop.
+	attempts=0
+	[ -f /boot/.resize-attempts ] && read attempts < /boot/.resize-attempts
+	if [ -f /boot/.resize-skip ] || [ "$attempts" -ge 2 ]; then
+		: > /boot/.resize-skip
+		umount /boot 2>/dev/null
+		return 0
+	fi
+	echo $((attempts + 1)) > /boot/.resize-attempts
+	resize_log "--- attempt $((attempts + 1)): fs ${fs_kb}K -> partition ${part_kb}K"
+
+	# No RTC on this board: preinit runs at epoch 0, and e2fsck then
+	# treats the clock as insane and skips updating s_lastcheck.
+	# The rootfs timestamps are the best reference we have here.
+	if [ "$(date +%Y)" -lt 2020 ] 2>/dev/null; then
+		date -s "$(date -r /etc/openwrt_release "+%Y-%m-%d %H:%M:%S" \
+			2>/dev/null)" >/dev/null 2>&1
+	fi
+
+	[ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0 2>/dev/null
+
+	sync
+	if ! mount -o remount,ro / 2>/dev/null; then
+		resize_log "could not remount / read-only, leaving the fs alone"
+		umount /boot 2>/dev/null
+		return 0
+	fi
+
+	loop=
+	for n in 0 1 2 3 4 5 6 7; do
+		[ -b /dev/loop$n ] || continue
+		losetup /dev/loop$n "$rootdev" 2>/dev/null && { loop=/dev/loop$n; break; }
+	done
+	if [ -z "$loop" ]; then
+		resize_log "no loop device available, leaving the fs alone"
+		mount -o remount,rw / 2>/dev/null
+		umount /boot 2>/dev/null
+		return 0
+	fi
+	resize_log "$loop -> $rootdev"
+
+	e2fsck -f -y "$loop" >> "$RESIZE_LOG" 2>&1
+	rc=$?
+	resize_log "e2fsck rc=$rc"
+
+	# rc 0 = clean, 1 = errors corrected, 2 = corrected, reboot wanted.
+	# Anything above that means e2fsck gave up, so do not grow it.
+	if [ "$rc" -le 2 ]; then
+		# -f: the fs is still mounted (read-only), so resize2fs's
+		# "please run e2fsck first" guard trips on the superblock state
+		# even though e2fsck just returned clean, a line above.
+		resize2fs -f "$loop" >> "$RESIZE_LOG" 2>&1
+		resize_log "resize2fs rc=$?"
+	else
+		resize_log "e2fsck could not clean the fs, not resizing"
+	fi
+
+	sync
+	losetup -d "$loop" 2>/dev/null
+	sync
+	resize_log "rebooting"
+	umount /boot 2>/dev/null
+	sync
+
+	# The running kernel still has the pre-resize superblock cached, so it
+	# must not reach do_mount_root. reboot -f skips shutdown entirely, which
+	# is what we want: / is read-only and nothing may be written now.
+	reboot -f
+	sleep 30
+}
+
+boot_hook_add preinit_main resize_ext4_root
