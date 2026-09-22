@@ -75,7 +75,7 @@ onecloud-install-emmc
 - USB 存储（ext4 / vfat / exfat / ntfs3 / f2fs）
 - USB 网卡（RTL8152、AX88179、ASIX、SMSC95xx）、安卓 / iPhone USB 共享网络、4G 上网卡
 - 常见 USB 无线网卡（MT7601U、MT76x0U、MT76x2U、RTL8XXXU、RT2800）
-- WireGuard、UPnP、ttyd 网页终端
+- UPnP、ttyd 网页终端
 
 Docker 数据默认放在根分区，升级时会被覆盖。经常用 Docker 的话建议插一个 U 盘或硬盘，在 LuCI 的 Docker 设置里把数据目录指到挂载点上。
 
