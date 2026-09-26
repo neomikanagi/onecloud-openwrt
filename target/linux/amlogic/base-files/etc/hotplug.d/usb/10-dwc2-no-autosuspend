@@ -1,0 +1,22 @@
+#!/bin/sh
+# Keep the dwc2 root hubs (both OneCloud USB ports) out of runtime suspend.
+#
+# When a dwc2 root hub with nothing plugged in is resumed, the driver
+# re-initialises the whole core: port power (VBUS) drops for a few ms and a
+# pending connect detection is cleared. usbcore sees the resume as a wakeup
+# that raced with the suspend and retries at once, so an empty port loops
+# suspend -> resume forever. A phone or 4G stick that drops off the bus then
+# never gets enumerated again until it is re-plugged by hand.
+
+[ "$ACTION" = add ] || exit 0
+[ "$DEVTYPE" = usb_device ] || exit 0
+
+case "${DEVPATH##*/}" in
+usb[0-9]*) ;;
+*) exit 0 ;;
+esac
+
+drv="$(readlink "/sys${DEVPATH%/*}/driver")"
+[ "${drv##*/}" = dwc2 ] || exit 0
+
+echo on > "/sys${DEVPATH}/power/control"
